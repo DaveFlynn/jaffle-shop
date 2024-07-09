@@ -17,6 +17,7 @@ renamed as (
         status
 
     from source
+    where status = 'completed'
 
 )
 
