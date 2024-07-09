@@ -12,3 +12,8 @@ jaffle_shop:
       path: 'jaffle_shop.duckdb'
       threads: 24
       schema: prod
+    pr:
+      type: duckdb
+      path: 'jaffle_shop.duckdb'
+      threads: 24
+      schema: "{{ env_var('DBT_SCHEMA') | as_text }}"
