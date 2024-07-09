@@ -1,11 +1,5 @@
 # Recce Preset Checks
 checks:
-  - name: Row count of customers
-    description: "Ensure we don't lose any data from the `customers` model."
-    type: row_count_diff
-    params:
-      node_names:
-        - customers
   - name: Schema diff of customers
     description: "Schema check of the `customers` model"
     type: schema_diff

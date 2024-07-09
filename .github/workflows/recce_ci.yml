@@ -1,4 +1,4 @@
-name: Jaffle Shop Recce CI
+name: Recce CI PR Branch
 
 on:
   pull_request:
@@ -20,58 +20,74 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-      - name: Install Recce
-        run: |
           pip install recce
-      - name: Add packages.yml file
+      - name: Download artifacts for the base environment
         run: |
-          echo '${{ vars.PACKAGES_YAML }}' > packages.yml
-      - name: Prepare dbt Base environment
-        run: |
-          if aws s3 cp s3://$AWS_S3_BUCKET/${{ github.event.pull_request.base.sha }}.tar.gz .; then
-            echo "Base environment found in S3"
-            tar -xvf ${{ github.event.pull_request.base.sha }}.tar.gz
-          else
-            echo "Base environment not found in S3. Running dbt to create base environment"
-            git checkout ${{ github.event.pull_request.base.sha }}
-            dbt deps
-            dbt seed --target ${{ env.DBT_BASE_TARGET }} --target-path target-base
-            dbt run --target ${{ env.DBT_BASE_TARGET }} --target-path target-base
-            dbt docs generate --target ${{ env.DBT_BASE_TARGET }} --target-path target-base  
-          fi
+          gh repo set-default ${{ github.repository }}
+          base_branch=${{ github.base_ref }}
+          run_id=$(gh run list --workflow ${WORKFLOW_BASE} --branch ${base_branch} --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "Download artifacts from run $run_id"
+          gh run download ${run_id} -n target -D target-base
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-          DBT_BASE_TARGET: "prod"
-
-      - name: Prepare dbt Current environment
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_BASE: ".github/workflows/dbt_base.yml"
+      - name: Set schema name for the PR environment
+        run: echo "DBT_SCHEMA=PR_${{ github.event.pull_request.number }}" >> $GITHUB_ENV          
+      - name: Prepare the PR environment
         run: |
-          git checkout ${{ github.event.pull_request.head.sha }}
           dbt deps
           dbt seed --target ${{ env.DBT_CURRENT_TARGET}}
           dbt run --target ${{ env.DBT_CURRENT_TARGET}}
           dbt docs generate --target ${{ env.DBT_CURRENT_TARGET}}
         env:
-          DBT_CURRENT_TARGET: "dev"
+          DBT_CURRENT_TARGET: "pr"
 
-      - name: Run Recce CI
+      - name: Run Recce
         run: |
-          recce run --github-pull-request-url ${{ github.event.pull_request.html_url }}
+          recce run --cloud --cloud-token ${{ secrets.RECCE_CLOUD_TOKEN }}
+        env:
+          RECCE_STATE_PASSWORD: ${{ secrets.RECCE_STATE_PASSWORD }}
 
-      - name: Archive Recce State File
+      - name: Upload DBT Artifacts
         uses: actions/upload-artifact@v4
-        id: recce-artifact-uploader
         with:
-          name: recce-state-file
-          path: recce_state.json
+          name: target
+          path: target/
 
+      - name: Prepare Recce Summary
+        id: recce-summary
+        run: |
+          recce summary --cloud --cloud-token ${{ secrets.RECCE_CLOUD_TOKEN }} > recce_summary.md
+          cat recce_summary.md >> $GITHUB_STEP_SUMMARY
+          echo '${{ env.NEXT_STEP_MESSAGE }}' >> recce_summary.md
+
+          # Handle the case when the recce summary is too long to be displayed in the GitHub PR comment
+          if [[ `wc -c recce_summary.md | awk '{print $1}'` -ge '65535' ]]; then
+            echo '# Recce Summary
+          The recce summary is too long to be displayed in the GitHub PR comment.
+          Please check the summary detail in the [Job Summary](${{github.server_url}}/${{github.repository}}/actions/runs/${{github.run_id}}) page.
+          ${{ env.NEXT_STEP_MESSAGE }}' > recce_summary.md
+          fi
+
+
+        env:
+          RECCE_STATE_PASSWORD: ${{ secrets.RECCE_STATE_PASSWORD }}
+          ARTIFACT_URL: ${{ steps.recce-artifact-uploader.outputs.artifact-url }}
+          NEXT_STEP_MESSAGE: |
+            ## Next Steps          
+            If you want to check more detail information about the recce result, please follow this instruction
+
+            ```bash
+            # Checkout to the PR branch
+            git checkout ${{ github.event.pull_request.head.ref }}
+
+            # Launch the recce server based on the state file
+            recce server --review --cloud --password <recce-state-password>
+
+            # Open the recce server http://localhost:8000 by your browser
+            ```
       - name: Comment on pull request
         uses: thollander/actions-comment-pull-request@v2
         with:
-          message: |
-            Recce `run` successfully completed.
-            Please download the [artifact](${{ env.ARTIFACT_URL }}) for the state file.
-        env:
-          ARTIFACT_URL: ${{ steps.recce-artifact-uploader.outputs.artifact-url }}
+          filePath: recce_summary.md
+          comment_tag: recce

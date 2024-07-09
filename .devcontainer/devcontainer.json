@@ -1,0 +1,12 @@
+{
+    "name": "Recce CodeSpace",
+    "build": {
+        "dockerfile": "Dockerfile",
+    },
+    "containerEnv": {
+        "RECCE_STATE_PASSWORD":"password",
+        "ENV_1": "env_1",
+        "ENV_2": "env_2",
+    },
+    "postStartCommand": "recce server --cloud --review"
+}
